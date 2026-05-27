@@ -1069,7 +1069,7 @@ export default function UndercoverPage() {
   // Three-phase flow: setup (enter players) → reveal (each person sees their word) → game (voting)
   const [phase, setPhase] = useState<"setup" | "reveal" | "game">("setup");
   const [nameInput, setNameInput] = useState("");
-  const [players, setPlayers] = useState<string[]>([]);
+  const [players, setPlayers] = useState<string[]>(["Phat"]);
   const [undercoverCount, setUndercoverCount] = useState(1);
   const [whiteHatCount, setWhiteHatCount] = useState(0);
   const [gamePlayers, setGamePlayers] = useState<Player[]>([]);
