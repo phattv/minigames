@@ -5,6 +5,9 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 
 const DEFAULT_NAMES = ["Phat", "Player 2", "Player 3", "Player 4"];
+const SEED_ROWS = 8;
+const STORAGE_KEY = "skyjo-v1";
+const DANGER = 100;
 const CHART_COLORS = [
   "#3b82f6",
   "#f97316",
@@ -13,8 +16,7 @@ const CHART_COLORS = [
   "#a855f7",
   "#ec4899",
 ];
-const SEED_ROWS = 10;
-const STORAGE_KEY = "tienlen-v1";
+const BEST_OF_OPTIONS = [3, 5, 7] as const;
 
 type Cell = number | "";
 
@@ -22,28 +24,24 @@ function makeRow(n: number): Cell[] {
   return Array<Cell>(n).fill("");
 }
 
-// Balanced scores for n players: [half, ..., 1, (0 if odd), -1, ..., -half]
-// n=4 → [2,1,-1,-2]  n=3 → [1,0,-1]  n=5 → [2,1,0,-1,-2]
-function rankScores(n: number): number[] {
-  const half = Math.floor(n / 2);
-  const s: number[] = [];
-  for (let i = half; i >= 1; i--) s.push(i);
-  if (n % 2 === 1) s.push(0);
-  for (let i = 1; i <= half; i++) s.push(-i);
-  return s;
+// Color a Skyjo card value: negative = great, high positive = bad
+function cellClass(v: number): string {
+  if (v <= 0) return "text-green-600 dark:text-green-400 font-semibold";
+  if (v <= 5) return "text-foreground";
+  if (v <= 9) return "text-orange-500 font-semibold";
+  return "text-red-500 font-semibold";
 }
 
-export default function TienLenPage() {
+const ORDINAL = ["", "1st", "2nd", "3rd", "4th", "5th", "6th", "7th", "8th"];
+
+export default function SkyjoPage() {
   const [players, setPlayers] = useState<string[]>(DEFAULT_NAMES);
   const [rows, setRows] = useState<Cell[][]>(() =>
     Array(SEED_ROWS)
       .fill(null)
       .map(() => makeRow(DEFAULT_NAMES.length)),
   );
-  // rankingRow: which row is in rank-assignment mode (null = none)
-  // rankOrder: player index → assigned finish position (1-based), null = not yet picked
-  const [rankingRow, setRankingRow] = useState<number | null>(null);
-  const [rankOrder, setRankOrder] = useState<(number | null)[]>([]);
+  const [bestOf, setBestOf] = useState<number | null>(null);
   const [copyFeedback, setCopyFeedback] = useState(false);
   const screenshotRef = useRef<HTMLDivElement>(null);
 
@@ -53,10 +51,11 @@ export default function TienLenPage() {
     try {
       const saved = localStorage.getItem(STORAGE_KEY);
       if (saved) {
-        const { players: p, rows: r } = JSON.parse(saved);
+        const { players: p, rows: r, bestOf: b } = JSON.parse(saved);
         if (Array.isArray(p) && Array.isArray(r)) {
           setPlayers(p);
           setRows(r);
+          if (typeof b === "number" || b === null) setBestOf(b);
         }
       }
     } catch {
@@ -65,8 +64,11 @@ export default function TienLenPage() {
   }, []);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ players, rows }));
-  }, [players, rows]);
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ players, rows, bestOf }),
+    );
+  }, [players, rows, bestOf]);
 
   // ── computed ──────────────────────────────────────────────────────────────
 
@@ -80,11 +82,34 @@ export default function TienLenPage() {
     );
 
   const colTotals = players.map((_, ci) => colSum(ci));
-  const maxTotal = colTotals.length ? Math.max(...colTotals) : 0;
-  const grandTotal = colTotals.reduce((s, t) => s + t, 0);
 
-  // Leader = player(s) with the highest positive total
-  const isLeader = (ci: number) => maxTotal > 0 && colTotals[ci] === maxTotal;
+  const activeCols = players
+    .map((_, ci) => ci)
+    .filter((ci) => rows.some((r) => r[ci] !== ""));
+
+  // Ranking: sorted ascending (lower total = better rank)
+  const rankings = (() => {
+    if (activeCols.length === 0) return [];
+    const entries = activeCols
+      .map((ci) => ({ ci, total: colTotals[ci] }))
+      .sort((a, b) => a.total - b.total);
+    let rank = 1;
+    return entries.map((entry, i) => {
+      if (i > 0 && entry.total !== entries[i - 1].total) rank = i + 1;
+      return { ...entry, rank };
+    });
+  })();
+
+  const getRank = (ci: number) =>
+    rankings.find((r) => r.ci === ci)?.rank ?? null;
+  const worstRank = rankings.length
+    ? Math.max(...rankings.map((r) => r.rank))
+    : 0;
+
+  const isLeader = (ci: number) => getRank(ci) === 1;
+  const filledRounds = rows.filter((r) => r.some((c) => c !== "")).length;
+  const gameOver = colTotals.some((t) => t >= DANGER);
+  const seriesComplete = bestOf !== null && filledRounds >= bestOf;
 
   // ── mutations ─────────────────────────────────────────────────────────────
 
@@ -103,7 +128,6 @@ export default function TienLenPage() {
   const addPlayer = () => {
     const n = players.length + 1;
     setPlayers((prev) => [...prev, `Player ${n}`]);
-    // Append an empty cell to every existing row
     setRows((prev) => prev.map((r) => [...r, ""]));
   };
 
@@ -111,56 +135,21 @@ export default function TienLenPage() {
     if (players.length <= 1) return;
     setPlayers((prev) => prev.filter((_, i) => i !== ci));
     setRows((prev) => prev.map((r) => r.filter((_, i) => i !== ci)));
-    setRankingRow(null);
   };
 
   const addRow = () => setRows((prev) => [...prev, makeRow(players.length)]);
 
   const removeRow = (ri: number) => {
     if (rows.length <= 1) return;
-    if (rankingRow === ri) setRankingRow(null);
     setRows((prev) => prev.filter((_, i) => i !== ri));
   };
 
   const clearAll = () => {
-    setRankingRow(null);
     setRows(
       Array(SEED_ROWS)
         .fill(null)
         .map(() => makeRow(players.length)),
     );
-  };
-
-  // ── quick rank ────────────────────────────────────────────────────────────
-
-  const startRanking = (ri: number) => {
-    setRankingRow(ri);
-    setRankOrder(Array(players.length).fill(null));
-  };
-
-  const cancelRanking = () => setRankingRow(null);
-
-  const pickRank = (ci: number, rank: number) => {
-    const next = rankOrder.map((r, i) => {
-      if (i === ci) return rank; // assign rank to this player
-      if (r === rank) return null; // un-assign same rank from whoever had it
-      return r;
-    });
-
-    // When all players have a rank, auto-fill scores and exit ranking mode
-    if (next.every((r) => r !== null)) {
-      const scores = rankScores(players.length);
-      setRows((prev) =>
-        prev.map((row, i) =>
-          i === rankingRow
-            ? row.map((_, j) => scores[(next[j] as number) - 1])
-            : row,
-        ),
-      );
-      setRankingRow(null);
-    } else {
-      setRankOrder(next);
-    }
   };
 
   // ── export ────────────────────────────────────────────────────────────────
@@ -177,11 +166,8 @@ export default function TienLenPage() {
 
     const colW = Math.max(6, ...players.map((p) => p.length));
     const numW = Math.max(3, String(rows.length).length + 1);
-
-    const fmt = (v: Cell | string, w: number, right = true) => {
-      const s = String(v);
-      return right ? s.padStart(w) : s.padEnd(w);
-    };
+    const fmt = (v: Cell | string, w: number, right = true) =>
+      right ? String(v).padStart(w) : String(v).padEnd(w);
 
     const sep = [
       "─".repeat(numW),
@@ -199,31 +185,36 @@ export default function TienLenPage() {
       const anyFilled = row.some((c) => c !== "");
       const sum = rowSum(row);
       const cells = row.map((c) =>
-        c === ""
-          ? " ".repeat(colW)
-          : fmt((c as number) > 0 ? `+${c}` : String(c), colW),
+        c === "" ? " ".repeat(colW) : fmt(String(c), colW),
       );
-      const sumStr = anyFilled
-        ? fmt(sum > 0 ? `+${sum}` : String(sum), 3)
-        : "   ";
+      const sumStr = anyFilled ? fmt(String(sum), 3) : "   ";
       return [fmt(ri + 1, numW), ...cells, sumStr].join(" │ ");
     });
 
-    const totalCells = colTotals.map((t) =>
-      fmt(t > 0 ? `+${t}` : String(t), colW),
-    );
-    const gtStr = fmt(
-      grandTotal === 0
-        ? "✓"
-        : grandTotal > 0
-          ? `+${grandTotal}`
-          : String(grandTotal),
-      3,
-    );
-    const totalLine = [fmt("Σ", numW), ...totalCells, gtStr].join(" │ ");
+    const totalCells = colTotals.map((t) => fmt(String(t), colW));
+    const totalLine = [fmt("Σ", numW), ...totalCells, "   "].join(" │ ");
 
+    // Ranking lines
+    const rankLines = rankings
+      .map(({ ci, total, rank }) => {
+        const isLast = rank === worstRank;
+        const tag = rank === 1 ? " ← trả sau" : isLast ? " ← trả trước" : "";
+        return `${rank}. ${players[ci].padEnd(colW)} ${String(total).padStart(4)}${tag}`;
+      })
+      .join("\n");
+
+    const label = bestOf ? `Skyjo (best of ${bestOf})` : "Skyjo";
     const table = [header, sep, ...dataLines, sep, totalLine].join("\n");
-    const text = "```\nTiến Lên — " + now + "\n" + table + "\n```";
+    const text =
+      "```\n" +
+      label +
+      " — " +
+      now +
+      "\n" +
+      table +
+      "\n\nXếp hạng:\n" +
+      rankLines +
+      "\n```";
 
     await navigator.clipboard.writeText(text);
     setCopyFeedback(true);
@@ -240,7 +231,7 @@ export default function TienLenPage() {
     });
     const a = document.createElement("a");
     a.href = url;
-    a.download = `tienlen-${Date.now()}.png`;
+    a.download = `skyjo-${Date.now()}.png`;
     a.click();
   };
 
@@ -255,13 +246,57 @@ export default function TienLenPage() {
         ← Home
       </Link>
 
-      {/* screenshotRef wraps title + table so the PNG looks self-contained */}
       <div ref={screenshotRef}>
-        <h1 className="text-2xl font-bold mb-6">Tiến Lên 🃏</h1>
+        {/* ── title + best-of selector ── */}
+        <div className="flex items-center gap-3 mb-4 flex-wrap">
+          <h1 className="text-2xl font-bold">Skyjo 🎴</h1>
+          <div className="flex items-center gap-1 ml-auto">
+            <span className="text-xs text-muted-foreground mr-1">Best of</span>
+            {BEST_OF_OPTIONS.map((n) => (
+              <button
+                key={n}
+                onClick={() => setBestOf(bestOf === n ? null : n)}
+                className={[
+                  "w-7 h-7 rounded text-xs font-semibold transition-colors",
+                  bestOf === n
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-muted hover:bg-muted/80 text-muted-foreground",
+                ].join(" ")}
+              >
+                {n}
+              </button>
+            ))}
+          </div>
+          {bestOf && (
+            <span className="text-sm text-muted-foreground">
+              Ván{" "}
+              <span
+                className={
+                  seriesComplete ? "text-green-600 font-bold" : "font-semibold"
+                }
+              >
+                {Math.min(filledRounds, bestOf)}
+              </span>
+              /{bestOf}
+            </span>
+          )}
+        </div>
+
+        {/* banners */}
+        {seriesComplete && (
+          <div className="mb-4 rounded-lg border border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-900/20 px-3 py-2 text-sm text-green-700 dark:text-green-400">
+            🏁 Đủ {bestOf} ván — xem bảng xếp hạng bên dưới.
+          </div>
+        )}
+        {!seriesComplete && gameOver && (
+          <div className="mb-4 rounded-lg border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/20 px-3 py-2 text-sm text-red-700 dark:text-red-400">
+            💀 Ai đó đã vượt {DANGER} — kết thúc vòng này rồi tính điểm cuối.
+          </div>
+        )}
 
         <div className="overflow-x-auto rounded-xl border border-border">
           <table className="w-full text-sm border-collapse">
-            {/* ── header: editable player names ── */}
+            {/* ── header ── */}
             <thead>
               <tr className="bg-muted/50">
                 <th className="w-9 text-center text-xs text-muted-foreground font-normal border-b border-r border-border py-2">
@@ -301,114 +336,44 @@ export default function TienLenPage() {
               </tr>
             </thead>
 
-            {/* ── body: score rows ── */}
+            {/* ── body ── */}
             <tbody>
               {rows.map((row, ri) => {
-                const sum = rowSum(row);
                 const anyFilled = row.some((c) => c !== "");
-                const isInvalid = anyFilled && sum !== 0;
-                const isRanking = rankingRow === ri;
+                const sum = rowSum(row);
+                const dimmed = bestOf !== null && ri >= bestOf;
 
                 return (
-                  <tr key={ri} className="group hover:bg-muted/20">
-                    {/* row number — click to enter quick-rank mode */}
+                  <tr
+                    key={ri}
+                    className={[
+                      "group hover:bg-muted/20",
+                      dimmed ? "opacity-40" : "",
+                    ].join(" ")}
+                  >
                     <td className="text-center text-xs text-muted-foreground border-r border-border py-0 select-none">
-                      {isRanking ? (
-                        <button
-                          onClick={cancelRanking}
-                          title="Huỷ xếp hạng"
-                          className="text-red-400 hover:text-red-600 px-1.5 py-1 text-xs"
-                        >
-                          ✕
-                        </button>
-                      ) : (
-                        <button
-                          onClick={() => startRanking(ri)}
-                          title="Xếp hạng nhanh"
-                          className="text-muted-foreground/50 hover:text-foreground px-1.5 py-1 text-xs transition-colors"
-                        >
-                          {ri + 1}
-                        </button>
-                      )}
+                      {ri + 1}
                     </td>
 
                     {row.map((cell, ci) => (
-                      <td
-                        key={ci}
-                        className={[
-                          "border-r border-border p-0",
-                          isLeader(ci)
-                            ? "bg-yellow-50/50 dark:bg-yellow-900/10"
-                            : "",
-                        ].join(" ")}
-                      >
-                        {isRanking ? (
-                          /* rank picker: buttons 1..n, one per finish position */
-                          <div className="flex justify-center gap-0.5 py-1 px-0.5">
-                            {Array.from(
-                              { length: players.length },
-                              (_, k) => k + 1,
-                            ).map((rank) => {
-                              const takenByOther = rankOrder.some(
-                                (r, idx) => r === rank && idx !== ci,
-                              );
-                              const selected = rankOrder[ci] === rank;
-                              return (
-                                <button
-                                  key={rank}
-                                  onClick={() =>
-                                    !takenByOther && pickRank(ci, rank)
-                                  }
-                                  className={[
-                                    "w-6 h-6 rounded text-xs font-medium transition-colors",
-                                    selected
-                                      ? "bg-primary text-primary-foreground"
-                                      : takenByOther
-                                        ? "opacity-25 cursor-not-allowed text-muted-foreground"
-                                        : "bg-muted hover:bg-muted/80 text-foreground",
-                                  ].join(" ")}
-                                >
-                                  {rank}
-                                </button>
-                              );
-                            })}
-                          </div>
-                        ) : (
-                          <input
-                            type="number"
-                            value={cell === "" ? "" : cell}
-                            onChange={(e) => updateCell(ri, ci, e.target.value)}
-                            className={[
-                              "w-full text-center py-2 px-1 bg-transparent outline-none focus:bg-muted/50",
-                              "[appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none",
-                              cell === ""
-                                ? ""
-                                : (cell as number) > 0
-                                  ? "text-green-600 dark:text-green-400 font-semibold"
-                                  : (cell as number) < 0
-                                    ? "text-red-500 font-semibold"
-                                    : "text-muted-foreground",
-                            ].join(" ")}
-                          />
-                        )}
+                      <td key={ci} className="border-r border-border p-0">
+                        <input
+                          type="number"
+                          value={cell === "" ? "" : cell}
+                          onChange={(e) => updateCell(ri, ci, e.target.value)}
+                          className={[
+                            "w-full text-center py-2 px-1 bg-transparent outline-none focus:bg-muted/50",
+                            "[appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none",
+                            cell === "" ? "" : cellClass(cell as number),
+                          ].join(" ")}
+                        />
                       </td>
                     ))}
 
-                    {/* row sum — red when entries don't balance to 0 */}
-                    <td
-                      className={[
-                        "text-center text-xs font-medium px-1 border-r border-border",
-                        !anyFilled
-                          ? "text-transparent select-none"
-                          : isInvalid
-                            ? "text-red-500 font-bold"
-                            : "text-muted-foreground",
-                      ].join(" ")}
-                    >
-                      {anyFilled ? sum : "—"}
+                    <td className="text-center text-xs font-medium px-1 border-r border-border text-muted-foreground">
+                      {anyFilled ? sum : ""}
                     </td>
 
-                    {/* delete row — only visible on hover */}
                     <td className="text-center">
                       <button
                         onClick={() => removeRow(ri)}
@@ -422,7 +387,7 @@ export default function TienLenPage() {
               })}
             </tbody>
 
-            {/* ── footer: column totals ── */}
+            {/* ── footer: rank + totals ── */}
             <tfoot>
               <tr className="border-t-2 border-border bg-muted/30">
                 <td className="text-center text-xs text-muted-foreground font-semibold py-2 border-r border-border select-none">
@@ -430,41 +395,105 @@ export default function TienLenPage() {
                 </td>
                 {players.map((_, ci) => {
                   const total = colTotals[ci];
+                  const rank = getRank(ci);
+                  const danger = total >= DANGER;
+                  const last = rank === worstRank && worstRank > 0;
                   return (
                     <td
                       key={ci}
                       className={[
-                        "text-center py-2 font-bold border-r border-border",
-                        isLeader(ci)
-                          ? "bg-yellow-50/50 dark:bg-yellow-900/10"
-                          : "",
-                        total > 0
-                          ? "text-green-600 dark:text-green-400"
-                          : total < 0
-                            ? "text-red-500"
-                            : "text-muted-foreground",
+                        "text-center border-r border-border py-1.5",
+                        danger
+                          ? "bg-red-50 dark:bg-red-900/20"
+                          : isLeader(ci)
+                            ? "bg-yellow-50/50 dark:bg-yellow-900/10"
+                            : "",
                       ].join(" ")}
                     >
-                      {total > 0 ? `+${total}` : total}
+                      {rank !== null && (
+                        <div
+                          className={[
+                            "text-[10px] font-bold leading-none mb-0.5",
+                            rank === 1
+                              ? "text-green-600 dark:text-green-400"
+                              : last
+                                ? "text-red-500"
+                                : "text-muted-foreground",
+                          ].join(" ")}
+                        >
+                          {ORDINAL[rank] ?? `#${rank}`}
+                        </div>
+                      )}
+                      <div
+                        className={[
+                          "text-sm font-bold",
+                          danger
+                            ? "text-red-500"
+                            : rank === 1
+                              ? "text-green-600 dark:text-green-400"
+                              : last
+                                ? "text-red-500"
+                                : "text-foreground",
+                        ].join(" ")}
+                      >
+                        {activeCols.includes(ci)
+                          ? danger
+                            ? `💀 ${total}`
+                            : total
+                          : ""}
+                      </div>
                     </td>
                   );
                 })}
-                <td
-                  title={
-                    grandTotal === 0 ? "Tổng hợp lệ" : "Tổng ≠ 0 — kiểm tra lại"
-                  }
-                  className={[
-                    "text-center text-xs font-bold py-2 border-r border-border",
-                    grandTotal === 0 ? "text-muted-foreground" : "text-red-500",
-                  ].join(" ")}
-                >
-                  {grandTotal === 0 ? "✓" : grandTotal}
-                </td>
+                <td className="border-r border-border" />
                 <td />
               </tr>
             </tfoot>
           </table>
         </div>
+
+        {/* ── live ranking panel ── */}
+        {rankings.length > 0 && (
+          <div className="mt-4 rounded-xl border border-border overflow-hidden">
+            <div className="px-3 py-2 text-xs font-medium text-muted-foreground border-b border-border bg-muted/30">
+              Xếp hạng
+            </div>
+            <div className="divide-y divide-border">
+              {rankings.map(({ ci, total, rank }) => {
+                const isFirst = rank === 1;
+                const isLast = rank === worstRank;
+                return (
+                  <div
+                    key={ci}
+                    className={[
+                      "flex items-center gap-3 px-3 py-2.5",
+                      isFirst ? "bg-yellow-50/60 dark:bg-yellow-900/10" : "",
+                    ].join(" ")}
+                  >
+                    <span
+                      className={[
+                        "text-sm font-bold w-8 shrink-0",
+                        isFirst
+                          ? "text-green-600 dark:text-green-400"
+                          : isLast
+                            ? "text-red-500"
+                            : "text-muted-foreground",
+                      ].join(" ")}
+                    >
+                      {ORDINAL[rank] ?? `#${rank}`}
+                    </span>
+                    <span className="flex-1 text-sm font-medium">
+                      {players[ci]}
+                    </span>
+                    <span className="text-sm font-bold tabular-nums">
+                      {total}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {/* ── cumulative score chart ── */}
         {(() => {
@@ -477,7 +506,6 @@ export default function TienLenPage() {
           const plotW = W - pad.left - pad.right;
           const plotH = H - pad.top - pad.bottom;
 
-          // Cumulative score per player at each filled round
           const series = players.map((_, ci) => {
             let sum = 0;
             return chartRows.map((row) => {
@@ -486,7 +514,7 @@ export default function TienLenPage() {
             });
           });
 
-          const allVals = [0, ...series.flat()];
+          const allVals = [0, DANGER, ...series.flat()];
           const yMin = Math.min(...allVals);
           const yMax = Math.max(...allVals);
           const yRange = yMax - yMin || 1;
@@ -495,10 +523,11 @@ export default function TienLenPage() {
             pad.left + (i / (chartRows.length - 1)) * plotW;
           const yScale = (v: number) =>
             pad.top + plotH - ((v - yMin) / yRange) * plotH;
-          const y0 = yScale(0);
+          const y100 = yScale(DANGER);
 
-          // Y axis ticks: min, 0, max (skip duplicates)
-          const yTicks = [...new Set([yMin, 0, yMax])];
+          const yTicks = [...new Set([0, DANGER])].filter(
+            (v) => v >= yMin && v <= yMax,
+          );
 
           return (
             <div className="mt-4 rounded-xl border border-border overflow-hidden">
@@ -511,7 +540,6 @@ export default function TienLenPage() {
                   className="w-full"
                   style={{ height: 130 }}
                 >
-                  {/* y-axis ticks */}
                   {yTicks.map((v) => (
                     <g key={v}>
                       <line
@@ -519,25 +547,35 @@ export default function TienLenPage() {
                         y1={yScale(v)}
                         x2={pad.left + plotW}
                         y2={yScale(v)}
-                        stroke="currentColor"
-                        strokeOpacity={v === 0 ? 0.2 : 0.08}
+                        stroke={v === DANGER ? "#ef4444" : "currentColor"}
+                        strokeOpacity={v === DANGER ? 0.4 : 0.15}
                         strokeWidth={1}
-                        strokeDasharray={v === 0 ? "4 3" : "2 4"}
+                        strokeDasharray="4 3"
                       />
                       <text
                         x={pad.left - 4}
                         y={yScale(v) + 4}
                         textAnchor="end"
                         fontSize={9}
-                        fill="currentColor"
-                        fillOpacity={0.4}
+                        fill={v === DANGER ? "#ef4444" : "currentColor"}
+                        fillOpacity={v === DANGER ? 0.7 : 0.4}
                       >
-                        {v > 0 ? `+${v}` : v}
+                        {v}
                       </text>
                     </g>
                   ))}
 
-                  {/* player lines */}
+                  {y100 > pad.top && (
+                    <rect
+                      x={pad.left}
+                      y={pad.top}
+                      width={plotW}
+                      height={y100 - pad.top}
+                      fill="#ef4444"
+                      fillOpacity={0.04}
+                    />
+                  )}
+
                   {series.map((data, ci) => {
                     const color = CHART_COLORS[ci % CHART_COLORS.length];
                     const pts = data
@@ -585,13 +623,12 @@ export default function TienLenPage() {
                           fill={color}
                           fontWeight="700"
                         >
-                          {last > 0 ? `+${last}` : last}
+                          {last}
                         </text>
                       </g>
                     );
                   })}
 
-                  {/* x-axis round labels */}
                   {chartRows.map((_, i) => (
                     <text
                       key={i}

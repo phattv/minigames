@@ -18,6 +18,12 @@ export default function Home() {
           >
             Tiến Lên 🃏
           </Link>
+          <Link
+            href="/skyjo"
+            className="text-sm text-muted-foreground underline underline-offset-4 hover:text-foreground"
+          >
+            Skyjo 🎴
+          </Link>
         </div>
       </div>
     </main>
