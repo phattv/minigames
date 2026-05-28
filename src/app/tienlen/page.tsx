@@ -45,6 +45,7 @@ export default function TienLenPage() {
   const [rankingRow, setRankingRow] = useState<number | null>(null);
   const [rankOrder, setRankOrder] = useState<(number | null)[]>([]);
   const [copyFeedback, setCopyFeedback] = useState(false);
+  const [focusedPlayer, setFocusedPlayer] = useState<number | null>(null);
   const screenshotRef = useRef<HTMLDivElement>(null);
 
   // ── localStorage ──────────────────────────────────────────────────────────
@@ -471,9 +472,9 @@ export default function TienLenPage() {
           const chartRows = rows.filter((row) => row.some((c) => c !== ""));
           if (chartRows.length < 2) return null;
 
-          const W = 500,
-            H = 130;
-          const pad = { top: 16, right: 72, bottom: 24, left: 36 };
+          const W = 560,
+            H = 260;
+          const pad = { top: 24, right: 90, bottom: 32, left: 44 };
           const plotW = W - pad.left - pad.right;
           const plotH = H - pad.top - pad.bottom;
 
@@ -495,21 +496,73 @@ export default function TienLenPage() {
             pad.left + (i / (chartRows.length - 1)) * plotW;
           const yScale = (v: number) =>
             pad.top + plotH - ((v - yMin) / yRange) * plotH;
-          const y0 = yScale(0);
 
           // Y axis ticks: min, 0, max (skip duplicates)
           const yTicks = [...new Set([yMin, 0, yMax])];
 
+          // De-collide right-side labels: sort by natural y, then push apart
+          const MIN_GAP = 22;
+          const labelPositions = series
+            .map((data, ci) => ({
+              ci,
+              naturalY: yScale(data[data.length - 1]),
+              adjustedY: yScale(data[data.length - 1]),
+            }))
+            .sort((a, b) => a.naturalY - b.naturalY);
+
+          for (let i = 1; i < labelPositions.length; i++) {
+            const prev = labelPositions[i - 1];
+            const curr = labelPositions[i];
+            if (curr.adjustedY - prev.adjustedY < MIN_GAP) {
+              curr.adjustedY = prev.adjustedY + MIN_GAP;
+            }
+          }
+          // If pushed beyond bottom, pull everything up
+          const lastLabel = labelPositions[labelPositions.length - 1];
+          const overflow = lastLabel.adjustedY - (pad.top + plotH + 4);
+          if (overflow > 0) {
+            labelPositions.forEach((lp) => (lp.adjustedY -= overflow));
+          }
+          const labelY: Record<number, number> = {};
+          labelPositions.forEach(({ ci, adjustedY }) => {
+            labelY[ci] = adjustedY;
+          });
+
           return (
             <div className="mt-4 rounded-xl border border-border overflow-hidden">
-              <div className="px-3 py-2 text-xs text-muted-foreground font-medium border-b border-border bg-muted/30">
-                Điểm tích luỹ
+              <div className="px-3 py-2 text-sm text-muted-foreground font-medium border-b border-border bg-muted/30">
+                Điểm
               </div>
-              <div className="px-2 pt-1 pb-2">
+              <div className="px-3 py-2 flex gap-2 flex-wrap border-b border-border">
+                {players.map((name, ci) => {
+                  const color = CHART_COLORS[ci % CHART_COLORS.length];
+                  const active = focusedPlayer === ci;
+                  return (
+                    <button
+                      key={ci}
+                      onClick={() => setFocusedPlayer(active ? null : ci)}
+                      className="flex items-center gap-1.5 px-3 py-1 rounded-full text-sm font-medium transition-all"
+                      style={{
+                        backgroundColor: active ? color : "transparent",
+                        color: active ? "#fff" : color,
+                        border: `2px solid ${color}`,
+                        opacity: focusedPlayer !== null && !active ? 0.35 : 1,
+                      }}
+                    >
+                      <span
+                        className="w-2 h-2 rounded-full"
+                        style={{ backgroundColor: active ? "#fff" : color }}
+                      />
+                      {name}
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="px-2 pt-2 pb-2">
                 <svg
                   viewBox={`0 0 ${W} ${H}`}
                   className="w-full"
-                  style={{ height: 130 }}
+                  style={{ height: 260 }}
                 >
                   {/* y-axis ticks */}
                   {yTicks.map((v) => (
@@ -520,87 +573,118 @@ export default function TienLenPage() {
                         x2={pad.left + plotW}
                         y2={yScale(v)}
                         stroke="currentColor"
-                        strokeOpacity={v === 0 ? 0.2 : 0.08}
+                        strokeOpacity={v === 0 ? 0.25 : 0.1}
                         strokeWidth={1}
                         strokeDasharray={v === 0 ? "4 3" : "2 4"}
                       />
                       <text
-                        x={pad.left - 4}
+                        x={pad.left - 6}
                         y={yScale(v) + 4}
                         textAnchor="end"
-                        fontSize={9}
+                        fontSize={11}
                         fill="currentColor"
-                        fillOpacity={0.4}
+                        fillOpacity={0.45}
                       >
                         {v > 0 ? `+${v}` : v}
                       </text>
                     </g>
                   ))}
 
-                  {/* player lines */}
-                  {series.map((data, ci) => {
-                    const color = CHART_COLORS[ci % CHART_COLORS.length];
-                    const pts = data
-                      .map((v, i) => `${xScale(i)},${yScale(v)}`)
-                      .join(" ");
-                    const last = data[data.length - 1];
-                    const lx = xScale(data.length - 1);
-                    const ly = yScale(last);
-                    const label =
-                      players[ci].length > 8
-                        ? players[ci].slice(0, 7) + "…"
-                        : players[ci];
-                    return (
-                      <g key={ci}>
-                        <polyline
-                          points={pts}
-                          fill="none"
-                          stroke={color}
-                          strokeWidth={2}
-                          strokeLinejoin="round"
-                          strokeLinecap="round"
-                        />
-                        {data.map((v, i) => (
-                          <circle
-                            key={i}
-                            cx={xScale(i)}
-                            cy={yScale(v)}
-                            r={3}
-                            fill={color}
+                  {/* player lines — dimmed first, focused on top */}
+                  {[...series.keys()]
+                    .sort((a, b) =>
+                      focusedPlayer === null
+                        ? 0
+                        : a === focusedPlayer
+                          ? 1
+                          : b === focusedPlayer
+                            ? -1
+                            : 0,
+                    )
+                    .map((ci) => {
+                      const data = series[ci];
+                      const color = CHART_COLORS[ci % CHART_COLORS.length];
+                      const isFocused =
+                        focusedPlayer === null || focusedPlayer === ci;
+                      const opacity = isFocused ? 1 : 0.12;
+                      const pts = data
+                        .map((v, i) => `${xScale(i)},${yScale(v)}`)
+                        .join(" ");
+                      const last = data[data.length - 1];
+                      const lx = xScale(data.length - 1);
+                      const ly = yScale(last);
+                      const labelYPos = labelY[ci];
+                      const label =
+                        players[ci].length > 10
+                          ? players[ci].slice(0, 9) + "…"
+                          : players[ci];
+                      return (
+                        <g
+                          key={ci}
+                          style={{ opacity, transition: "opacity 0.2s" }}
+                        >
+                          <polyline
+                            points={pts}
+                            fill="none"
+                            stroke={color}
+                            strokeWidth={
+                              isFocused && focusedPlayer !== null ? 3 : 2.5
+                            }
+                            strokeLinejoin="round"
+                            strokeLinecap="round"
                           />
-                        ))}
-                        <text
-                          x={lx + 7}
-                          y={ly - 3}
-                          fontSize={8}
-                          fill={color}
-                          fontWeight="500"
-                        >
-                          {label}
-                        </text>
-                        <text
-                          x={lx + 7}
-                          y={ly + 8}
-                          fontSize={9}
-                          fill={color}
-                          fontWeight="700"
-                        >
-                          {last > 0 ? `+${last}` : last}
-                        </text>
-                      </g>
-                    );
-                  })}
+                          {data.map((v, i) => (
+                            <circle
+                              key={i}
+                              cx={xScale(i)}
+                              cy={yScale(v)}
+                              r={isFocused && focusedPlayer !== null ? 5 : 4}
+                              fill={color}
+                            />
+                          ))}
+                          {Math.abs(labelYPos - ly) > 4 && (
+                            <line
+                              x1={lx + 4}
+                              y1={ly}
+                              x2={lx + 8}
+                              y2={labelYPos}
+                              stroke={color}
+                              strokeOpacity={0.35}
+                              strokeWidth={1}
+                            />
+                          )}
+                          <text
+                            x={lx + 10}
+                            y={labelYPos - 5}
+                            fontSize={11}
+                            fill={color}
+                            fontWeight="500"
+                          >
+                            {label}
+                          </text>
+                          <text
+                            x={lx + 10}
+                            y={labelYPos + 9}
+                            fontSize={12}
+                            fill={color}
+                            fontWeight="700"
+                          >
+                            {last > 0 ? `+${last}` : last}
+                          </text>
+                        </g>
+                      );
+                    })}
 
                   {/* x-axis round labels */}
                   {chartRows.map((_, i) => (
                     <text
                       key={i}
                       x={xScale(i)}
-                      y={H - 5}
+                      y={H - 8}
                       textAnchor="middle"
-                      fontSize={8}
+                      fontSize={11}
                       fill="currentColor"
-                      fillOpacity={0.35}
+                      fillOpacity={0.4}
                     >
                       {i + 1}
                     </text>

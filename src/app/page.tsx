@@ -1,10 +1,14 @@
 import Link from "next/link";
+import { FontSizeControl } from "@/components/font-size-control";
 
 export default function Home() {
   return (
     <main className="min-h-screen flex items-center justify-center">
       <div className="text-center space-y-4">
         <h1 className="text-4xl font-bold">Phat's Mini Games</h1>
+        <div className="flex justify-center">
+          <FontSizeControl />
+        </div>
         <div className="flex flex-col gap-2 items-center">
           <Link
             href="/undercover"

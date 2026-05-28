@@ -43,6 +43,7 @@ export default function SkyjoPage() {
   );
   const [bestOf, setBestOf] = useState<number | null>(null);
   const [copyFeedback, setCopyFeedback] = useState(false);
+  const [focusedPlayer, setFocusedPlayer] = useState<number | null>(null);
   const screenshotRef = useRef<HTMLDivElement>(null);
 
   // ── localStorage ──────────────────────────────────────────────────────────
@@ -500,9 +501,8 @@ export default function SkyjoPage() {
           const chartRows = rows.filter((row) => row.some((c) => c !== ""));
           if (chartRows.length < 2) return null;
 
-          const W = 500,
-            H = 130;
-          const pad = { top: 16, right: 72, bottom: 24, left: 36 };
+          const W = 560, H = 260;
+          const pad = { top: 24, right: 90, bottom: 32, left: 44 };
           const plotW = W - pad.left - pad.right;
           const plotH = H - pad.top - pad.bottom;
 
@@ -529,36 +529,71 @@ export default function SkyjoPage() {
             (v) => v >= yMin && v <= yMax,
           );
 
+          // De-collide right-side labels
+          const MIN_GAP = 22;
+          const labelPositions = series
+            .map((data, ci) => ({
+              ci,
+              naturalY: yScale(data[data.length - 1]),
+              adjustedY: yScale(data[data.length - 1]),
+            }))
+            .sort((a, b) => a.naturalY - b.naturalY);
+          for (let i = 1; i < labelPositions.length; i++) {
+            const prev = labelPositions[i - 1];
+            const curr = labelPositions[i];
+            if (curr.adjustedY - prev.adjustedY < MIN_GAP)
+              curr.adjustedY = prev.adjustedY + MIN_GAP;
+          }
+          const lastLabel = labelPositions[labelPositions.length - 1];
+          const overflow = lastLabel.adjustedY - (pad.top + plotH + 4);
+          if (overflow > 0) labelPositions.forEach((lp) => (lp.adjustedY -= overflow));
+          const labelY: Record<number, number> = {};
+          labelPositions.forEach(({ ci, adjustedY }) => { labelY[ci] = adjustedY; });
+
           return (
             <div className="mt-4 rounded-xl border border-border overflow-hidden">
-              <div className="px-3 py-2 text-xs text-muted-foreground font-medium border-b border-border bg-muted/30">
+              <div className="px-3 py-2 text-sm text-muted-foreground font-medium border-b border-border bg-muted/30">
                 Điểm tích luỹ
               </div>
-              <div className="px-2 pt-1 pb-2">
-                <svg
-                  viewBox={`0 0 ${W} ${H}`}
-                  className="w-full"
-                  style={{ height: 130 }}
-                >
+              <div className="px-3 py-2 flex gap-2 flex-wrap border-b border-border">
+                {players.map((name, ci) => {
+                  const color = CHART_COLORS[ci % CHART_COLORS.length];
+                  const active = focusedPlayer === ci;
+                  return (
+                    <button
+                      key={ci}
+                      onClick={() => setFocusedPlayer(active ? null : ci)}
+                      className="flex items-center gap-1.5 px-3 py-1 rounded-full text-sm font-medium transition-all"
+                      style={{
+                        backgroundColor: active ? color : "transparent",
+                        color: active ? "#fff" : color,
+                        border: `2px solid ${color}`,
+                        opacity: focusedPlayer !== null && !active ? 0.35 : 1,
+                      }}
+                    >
+                      <span className="w-2 h-2 rounded-full" style={{ backgroundColor: active ? "#fff" : color }} />
+                      {name}
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="px-2 pt-2 pb-2">
+                <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ height: 260 }}>
                   {yTicks.map((v) => (
                     <g key={v}>
                       <line
-                        x1={pad.left}
-                        y1={yScale(v)}
-                        x2={pad.left + plotW}
-                        y2={yScale(v)}
+                        x1={pad.left} y1={yScale(v)}
+                        x2={pad.left + plotW} y2={yScale(v)}
                         stroke={v === DANGER ? "#ef4444" : "currentColor"}
                         strokeOpacity={v === DANGER ? 0.4 : 0.15}
                         strokeWidth={1}
                         strokeDasharray="4 3"
                       />
                       <text
-                        x={pad.left - 4}
-                        y={yScale(v) + 4}
-                        textAnchor="end"
-                        fontSize={9}
+                        x={pad.left - 6} y={yScale(v) + 4}
+                        textAnchor="end" fontSize={11}
                         fill={v === DANGER ? "#ef4444" : "currentColor"}
-                        fillOpacity={v === DANGER ? 0.7 : 0.4}
+                        fillOpacity={v === DANGER ? 0.7 : 0.45}
                       >
                         {v}
                       </text>
@@ -567,77 +602,56 @@ export default function SkyjoPage() {
 
                   {y100 > pad.top && (
                     <rect
-                      x={pad.left}
-                      y={pad.top}
-                      width={plotW}
-                      height={y100 - pad.top}
-                      fill="#ef4444"
-                      fillOpacity={0.04}
+                      x={pad.left} y={pad.top}
+                      width={plotW} height={y100 - pad.top}
+                      fill="#ef4444" fillOpacity={0.04}
                     />
                   )}
 
-                  {series.map((data, ci) => {
-                    const color = CHART_COLORS[ci % CHART_COLORS.length];
-                    const pts = data
-                      .map((v, i) => `${xScale(i)},${yScale(v)}`)
-                      .join(" ");
-                    const last = data[data.length - 1];
-                    const lx = xScale(data.length - 1);
-                    const ly = yScale(last);
-                    const label =
-                      players[ci].length > 8
-                        ? players[ci].slice(0, 7) + "…"
-                        : players[ci];
-                    return (
-                      <g key={ci}>
-                        <polyline
-                          points={pts}
-                          fill="none"
-                          stroke={color}
-                          strokeWidth={2}
-                          strokeLinejoin="round"
-                          strokeLinecap="round"
-                        />
-                        {data.map((v, i) => (
-                          <circle
-                            key={i}
-                            cx={xScale(i)}
-                            cy={yScale(v)}
-                            r={3}
-                            fill={color}
+                  {[...series.keys()]
+                    .sort((a, b) =>
+                      focusedPlayer === null ? 0 : a === focusedPlayer ? 1 : b === focusedPlayer ? -1 : 0
+                    )
+                    .map((ci) => {
+                      const data = series[ci];
+                      const color = CHART_COLORS[ci % CHART_COLORS.length];
+                      const isFocused = focusedPlayer === null || focusedPlayer === ci;
+                      const opacity = isFocused ? 1 : 0.12;
+                      const pts = data.map((v, i) => `${xScale(i)},${yScale(v)}`).join(" ");
+                      const last = data[data.length - 1];
+                      const lx = xScale(data.length - 1);
+                      const ly = yScale(last);
+                      const labelYPos = labelY[ci];
+                      const label = players[ci].length > 10 ? players[ci].slice(0, 9) + "…" : players[ci];
+                      return (
+                        <g key={ci} style={{ opacity, transition: "opacity 0.2s" }}>
+                          <polyline
+                            points={pts} fill="none" stroke={color}
+                            strokeWidth={isFocused && focusedPlayer !== null ? 3 : 2.5}
+                            strokeLinejoin="round" strokeLinecap="round"
                           />
-                        ))}
-                        <text
-                          x={lx + 7}
-                          y={ly - 3}
-                          fontSize={8}
-                          fill={color}
-                          fontWeight="500"
-                        >
-                          {label}
-                        </text>
-                        <text
-                          x={lx + 7}
-                          y={ly + 8}
-                          fontSize={9}
-                          fill={color}
-                          fontWeight="700"
-                        >
-                          {last}
-                        </text>
-                      </g>
-                    );
-                  })}
+                          {data.map((v, i) => (
+                            <circle key={i} cx={xScale(i)} cy={yScale(v)}
+                              r={isFocused && focusedPlayer !== null ? 5 : 4} fill={color} />
+                          ))}
+                          {Math.abs(labelYPos - ly) > 4 && (
+                            <line x1={lx + 4} y1={ly} x2={lx + 8} y2={labelYPos}
+                              stroke={color} strokeOpacity={0.35} strokeWidth={1} />
+                          )}
+                          <text x={lx + 10} y={labelYPos - 5} fontSize={11} fill={color} fontWeight="500">
+                            {label}
+                          </text>
+                          <text x={lx + 10} y={labelYPos + 9} fontSize={12} fill={color} fontWeight="700">
+                            {last}
+                          </text>
+                        </g>
+                      );
+                    })}
 
                   {chartRows.map((_, i) => (
-                    <text
-                      key={i}
-                      x={xScale(i)}
-                      y={H - 5}
-                      textAnchor="middle"
-                      fontSize={8}
-                      fill="currentColor"
-                      fillOpacity={0.35}
+                    <text key={i} x={xScale(i)} y={H - 8}
+                      textAnchor="middle" fontSize={11}
+                      fill="currentColor" fillOpacity={0.4}
                     >
                       {i + 1}
                     </text>

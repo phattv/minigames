@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-05-28
+
+- Switched to Momo Trust Sans (body) + Momo Signature (headings) fonts with Vietnamese subset
+- Font size control on home screen: S (75%) / M (100%) / L (125%), persisted to localStorage
+- Enhance chart: bigger size and highlight one line & dim the rest
+
 ## 2026-05-27
 
 ### Skyjo (`/skyjo`)
